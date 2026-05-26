@@ -23,6 +23,96 @@ Safety-first ADB optimization for Android devices. Every operation must be rever
 5. **Never modify `/system`**: Without root and full backup, modifying system partitions risks bricking.
 6. **Backup before aggressive actions**: If user wants `pm uninstall` or root tweaks, warn them first.
 
+## Environment Setup
+
+Before any optimization, ensure ADB is available and device is connected.
+
+### 1. Install ADB
+
+If `adb` not found, install platform tools for current OS:
+
+```bash
+# macOS
+if ! command -v adb &>/dev/null; then
+  if command -v brew &>/dev/null; then
+    brew install --cask android-platform-tools
+  else
+    echo "Install Homebrew first: https://brew.sh"
+    exit 1
+  fi
+fi
+
+# Linux (Debian/Ubuntu)
+if ! command -v adb &>/dev/null; then
+  sudo apt install -y adb fastboot
+fi
+
+# Linux (Arch)
+if ! command -v adb &>/dev/null; then
+  sudo pacman -S android-tools
+fi
+
+# Windows (via winget)
+if ! command -v adb &>/dev/null; then
+  winget install Google.AndroidPlatformTools
+fi
+```
+
+### 2. Verify Installation
+
+```bash
+adb --version
+```
+
+### 3. Enable ADB on Device
+
+User must do this manually on the phone:
+
+```
+Settings → About Phone → Tap "Build Number" 7x → Developer options
+Settings → Developer options → USB Debugging → ON
+Settings → Developer options → Stay Awake → ON (optional)
+Settings → Developer options → Disable ADB Authorization Timeout → ON
+```
+
+### 4. Connect Device
+
+**USB connection:**
+
+```bash
+adb devices -l
+# Expected: <serial> device <model>
+# If unauthorized → check phone screen → allow USB debugging → check "Always allow"
+```
+
+**WiFi connection (no USB cable):**
+
+```bash
+# After USB connection is established, switch to TCP:
+adb tcpip 5555
+adb connect <device-ip>:5555
+# Now disconnect USB — device stays connected on LAN
+# Check: adb devices -l (should show <ip>:5555 device)
+```
+
+**WiFi pairing (Android 11+, no cable at all):**
+
+```bash
+# On phone: Developer options → Wireless debugging → enable → Pair device with pairing code
+# This gives you IP:PORT and pairing code
+adb pair <ip>:<pairing-port> <code>
+adb connect <ip>:<connect-port>
+```
+
+### 5. Test Connection
+
+```bash
+adb shell echo "connected"
+adb shell getprop ro.product.model
+```
+
+If any step fails, stop and ask user to fix the connection before proceeding.
+
 ## Quick Reference: What Works Where
 
 | Operation | Root | Non-Root (ADB) | Notes |

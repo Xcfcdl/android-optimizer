@@ -31,6 +31,33 @@ cp android-optimizer.skill ~/.opencode/skills/
 
 纯文档浏览，直接打开 `SKILL.md`。
 
+## Prerequisites — ADB + Device Connection
+
+Skill 会自动检查 ADB 环境并引导安装，你也可以手动准备：
+
+```bash
+# macOS
+brew install --cask android-platform-tools
+
+# Linux
+sudo apt install adb fastboot
+
+# Windows
+winget install Google.AndroidPlatformTools
+```
+
+手机上需开启：
+
+```
+设置 → 关于手机 → 连点"版本号"7次 → 返回 → 开发者选项
+打开 USB 调试 → 连接电脑 → 弹窗点允许
+```
+
+```bash
+# 验证
+adb devices -l     # 应该看到设备 serial
+```
+
 ## Usage
 
 ### Quick Start
