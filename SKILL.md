@@ -22,6 +22,12 @@ Safety-first ADB optimization for Android devices. Every operation must be rever
 4. **Test one change at a time**: Batch is efficient, but isolate if user hits issues.
 5. **Never modify `/system`**: Without root and full backup, modifying system partitions risks bricking.
 6. **Backup before aggressive actions**: If user wants `pm uninstall` or root tweaks, warn them first.
+7. **⚠️ NEVER delete packages.xml**: Deleting `/data/system/packages.xml` bricks the device (stuck at boot animation). The package manager cannot write to CE-encrypted storage without user unlock. If accidentally deleted:
+   - Boot to recovery
+   - Mount data partition
+   - If `.bak` exists, restore it
+   - If no backup, you must `adb root` and create a minimal packages.xml, or dirty flash the ROM
+   - Full boot + user unlock may be needed for the package manager to write the CE storage
 
 ## Environment Setup
 
@@ -117,7 +123,8 @@ If any step fails, stop and ask user to fix the connection before proceeding.
 
 | Operation | Root | Non-Root (ADB) | Notes |
 |-----------|------|-----------------|-------|
-| `pm disable-user` | ✅ | ✅ | Works on all devices |
+| `pm disable-user` | ✅ | ✅ | Works on all devices (use `--user 0` flag) |
+| `pm disable` (without --user) | ✅ | ❌ | Fails on Android 9+ with SecurityException |
 | `cmd appops set` | ✅ | ✅ | Runtime permission control |
 | `settings put global` | ✅ | ❌ | Blocked on Android 13+ (needs WRITE_SECURE_SETTINGS) |
 | `settings put system` | ✅ | ❌ | Blocked on HyperOS 15+, Android 15+ |
@@ -125,6 +132,8 @@ If any step fails, stop and ask user to fix the connection before proceeding.
 | GPU governor | ✅ | ❌ | Via sysfs, needs root/su |
 | Magisk module install | ✅ | ❌ | Requires Magisk root |
 | `pm uninstall -k --user 0` | ✅ | ⚠️ | Works on some ROMs, risky without backup |
+| `adb root` | ✅ | ❌ | Only works on userdebug/user builds (LineageOS, crDroid). Stock ROMs deny. |
+| `cmd package reconcile` | ✅ | ❌ | Not available on Android 15+ |
 
 ## Workflow
 
@@ -318,7 +327,48 @@ adb shell rm -rf /sdcard/tencent/*  # QQ/WeChat temp files (if safe)
 adb shell du -sh /sdcard/Download /sdcard/DCIM/.thumbnails /sdcard/Android/data/*/cache
 ```
 
-### Step 6: Root-Only Tweaks
+### Step 6: Reading Device (E-ink) Optimizations
+
+For e-ink devices (Hisense A5/A5 Pro/A7, Boox, etc.) used primarily for reading:
+
+```bash
+# No animations needed on e-ink
+adb shell settings put global window_animation_scale 0
+adb shell settings put global transition_animation_scale 0
+adb shell settings put global animator_duration_scale 0
+
+# Longer screen timeout for reading
+adb shell settings put system screen_off_timeout 600000  # 10 min
+
+# Reading comfort
+adb shell settings put system font_scale 1.15
+adb shell settings put system haptic_feedback_enabled 0
+adb shell settings put system sound_effects_enabled 0
+adb shell settings put system notification_light_pulse 0
+
+# Radios not needed for reading
+adb shell settings put secure location_providers_allowed -gps -network -wifi
+adb shell settings put global ble_scan_always_enabled 0
+adb shell settings put global wifi_scan_always_available 0
+adb shell settings put global auto_sync 0
+adb shell svc wifi disable 2>/dev/null
+adb shell svc bluetooth disable 2>/dev/null
+
+# Disable reading-unnecessary system apps
+adb shell pm disable-user --user 0 com.hisense.hiphone.appstore 2>/dev/null
+adb shell pm disable-user --user 0 com.hmct.music 2>/dev/null
+adb shell pm disable-user --user 0 com.hmct.updater 2>/dev/null
+adb shell pm disable-user --user 0 com.hmct.gamemodefloatwindow 2>/dev/null
+adb shell pm disable-user --user 0 com.hisense.hiphone.payment 2>/dev/null
+```
+
+**Retain** these for reading quality: reading apps (微信读书, 掌阅, 多看), file managers, dictionary apps.
+
+Note: On Hisense A5 Pro (Android 9), the shell is very limited — no `head`, `wc`, `sed`, `awk`, `cut`. Use basic shell commands only.
+
+Warning: `pm disable` (without `--user 0`) fails on Android 9+ with `SecurityException: Shell cannot change component state`. Always use `pm disable-user --user 0`.
+
+### Step 7: Root-Only Tweaks
 
 Only execute these if device is rooted and user explicitly requests it.
 
@@ -370,7 +420,32 @@ done
 echo Y > /sys/module/lpm_levels/parameters/sleep_disabled 2>/dev/null
 ```
 
-### Step 7: Recovery & Unbrick (救砖)
+### Step 7: Flash ROM via Recovery Sideload
+
+Recovery sideload is useful for installing custom ROMs, Gapps, or Magisk when Direct Install fails.
+
+```bash
+# 1. Reboot to recovery
+adb reboot bootloader    # First to fastboot
+fastboot boot recovery.img  # Boot any recovery image temporarily (doesn't flash)
+# OR
+adb reboot recovery     # If device is running and has a recovery
+
+# 2. On device: navigate to "Apply update" → "Apply from ADB"
+# 3. Send the ROM/Gapps/Magisk zip:
+adb sideload /path/to/package.zip
+
+# 4. Repeat for additional packages (Gapps, Magisk)
+# 5. On device: select "Reboot system now"
+```
+
+Notes:
+- `Total xfer: 0.98x` or `0.99x` is normal and means success.
+- Magisk APK can be renamed to `.zip` and flashed directly.
+- LineageOS recovery works for crDroid, LineageOS, and other AOSP-based ROMs.
+- For `pm disable`-related bricks: boot recovery → mount data → `rm -rf /data/system/packages.xml.bak` or restore from backup.
+
+### Step 8: Recovery & Unbrick (救砖)
 
 **Warn user before any root tweak**: "If the device won't boot after this, here is the recovery plan."
 
@@ -529,3 +604,37 @@ adb shell settings put global low_power 0
 adb shell settings put global wifi_scan_always_available 1
 adb shell settings put global nfc_on 1
 ```
+
+## Android Version Quirks
+
+| Version | ADB | Root | Notes |
+|---------|-----|------|-------|
+| **Android 5.x** (SDK 21-22) | ✅ Full | ✅ SuperSU | Very limited shell (no `head`, `wc`, `sed`, `awk`, `cut`). Intel Atom on some devices. Use basic commands only. |
+| **Android 9** (SDK 28) | ✅ Most | ⚠️ | `pm disable` without `--user 0` fails. Shell has basic toolbox. |
+| **Android 13+** (SDK 33+) | ⚠️ | ✅ | `settings put global/system` blocked from shell. Need `su -c` or user manual. |
+| **Android 15+** (SDK 35+) | ⚠️ | ✅ | `cmd package reconcile` removed. FBE (File-Based Encryption) locks CE storage. `adb root` only on userdebug builds. |
+| **HyperOS 15+** | ⚠️ | ✅ | Same as Android 15+ but stricter SELinux. Even root may have limitations. |
+
+## FBE (File-Based Encryption) on Android 15+
+
+On Android 15+ with FBE:
+- `/data` has two encryption layers: **DE** (Device Encrypted, available after boot) and **CE** (Credential Encrypted, requires user unlock)
+- **DE**: `/data/system_de/0/`, `/data_mirror/data_de/` — accessible before user unlocks
+- **CE**: `/data/system_ce/0/`, `/data/user/0/`, `/data/app/` — locked until user enters PIN/password
+- In recovery, CE appears as encrypted filenames or empty directories
+- `df` shows data used on `/data`, but `ls /data/system/` returns empty due to CE lock
+- Only `adb root` (on userdebug builds) or `su` (with root) can bypass CE restrictions
+
+**If packages.xml is missing and CE is locked**: Device stays in boot animation forever. The package manager scans APKs but can't write to CE storage to save the database. Fix:
+1. Boot normally, `adb root` → restore from `.bak` → reboot
+2. Or dirty flash the ROM (replaces system, preserves data)
+3. If no backup, you need to create a minimal packages.xml or flash a fresh ROM
+
+## Device-Specific Known Devices
+
+| Device | OS | Shell | Root | Notes |
+|--------|----|-------|------|-------|
+| **Hisense A5 Pro** (HLTE202N) | Android 9 | Limited | No | E-ink reading phone. Use `pm disable-user --user 0`. 4GB RAM. No `sed/awk`. |
+| **Mi Mix 2** (chiron) | Android 15-16 | Full | ✅ Magisk | SD835. Great custom ROM support (LineageOS, crDroid). Userdebug builds support `adb root`. |
+| **Mi Pad 2** (latte) | Android 5.1 | Very limited | ✅ SuperSU | Intel Atom x86. Very few shell tools. No `sed/awk/head/wc/cut`. |
+| **Redmi Note 13 Pro** (24069RA21C) | Android 16 HyperOS 2 | Full | No | `settings put` blocked. Needs bootloader unlock for root. |
